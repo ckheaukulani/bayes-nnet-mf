@@ -96,28 +96,31 @@ class SbmNNetMF:
 
         activation_fn = tf.nn.relu
         n_inputs = tf.cast(inputs_.shape[-1], tf.int32)
-        for layer_size in hidden_layer_sizes:  # if an empty list then this loop is not entered
+        for layer_i, layer_size in enumerate(hidden_layer_sizes):  # if an empty list then this loop is not entered
+            
+            with tf.name_scope("NN_layer_%d" % layer_i):
 
-            # the p and q distributions for this layer's weights
-            qW_dist = ds.Normal(loc=tf.Variable(tf.random_normal([n_inputs, layer_size]), name='qW_layer_mean'),
-                                scale=tf.nn.softplus(tf.Variable(tf.ones([n_inputs, layer_size]) * init_scale, name='qW_layer_std_unc')),
-                                name='qW_layer_dist')
+                # the p and q distributions for this layer's weights
+                # TODO: check whether we need to swap n_inputs and layer_size here
+                qW_dist = ds.Normal(loc=tf.Variable(tf.random_normal([n_inputs, layer_size]), name='qW_layer_mean'),
+                                    scale=tf.nn.softplus(tf.Variable(tf.ones([n_inputs, layer_size]) * init_scale, name='qW_layer_std_unc')),
+                                    name='qW_layer_dist')
 
-            # biases
-            qB_dist = ds.Normal(loc=tf.Variable(tf.random_normal([layer_size]), name='qB_mean'),
-                                scale=tf.nn.softplus(tf.Variable(tf.ones([layer_size]) * init_scale, name='qB_std_unc')),
-                                name='qB_dist')
+                # biases
+                qB_dist = ds.Normal(loc=tf.Variable(tf.random_normal([layer_size]), name='qB_mean'),
+                                    scale=tf.nn.softplus(tf.Variable(tf.ones([layer_size]) * init_scale, name='qB_std_unc')),
+                                    name='qB_dist')
 
-            W_samps = qW_dist.sample(self.n_samples)  # (n_samples, prev_layer_size, layer_size)
-            B_samps = qB_dist.sample(self.n_samples)  # (n_samples, layer_size)
+                W_samps = qW_dist.sample(self.n_samples)  # (n_samples, prev_layer_size, layer_size)
+                B_samps = qB_dist.sample(self.n_samples)  # (n_samples, layer_size)
 
-            # inputs_ will be (n_samples, n_T_pairs, prev_layer_size)
-            inputs_ = activation_fn(tf.matmul(inputs_, W_samps) + B_samps[:, None, :])  # (n_samples, n_T_pairs, layer_size)
+                # inputs_ will be (n_samples, n_T_pairs, prev_layer_size)
+                inputs_ = activation_fn(tf.matmul(inputs_, W_samps) + B_samps[:, None, :])  # (n_samples, n_T_pairs, layer_size)
 
-            n_inputs = layer_size
+                n_inputs = layer_size
 
-            # store the distribution objects, but we won't need the samples
-            self.nnet_tensors.append((qW_dist, qB_dist))
+                # store the distribution objects, but we won't need the samples
+                self.nnet_tensors.append((qW_dist, qB_dist))
 
 
         # the output layer mapping to a single probability of a link
@@ -127,7 +130,7 @@ class SbmNNetMF:
 
         qB_dist = ds.Normal(loc=tf.Variable(tf.random_normal([1]), name='qB_out_mean'),
                             scale=tf.nn.softplus(tf.Variable(init_scale, name='qB_out_std_unc')),
-                            name='qB_dist')
+                            name='qB_out_dist')
 
         self.nnet_tensors.append((qW_dist, qB_dist))
 
@@ -185,10 +188,11 @@ class SbmNNetMF:
         self.E_log_V = tf.digamma(self.qV_shp1) - digamma_sum  # (T-1,)
         self.E_log_1mV = tf.digamma(self.qV_shp2) - digamma_sum
 
-        # KL terms for E[log p(Z|V)] with V integrated out
+        # KL terms for E[log p(Z|V)] with V integrated out (verified this, it's correct)
+        # note KL divergence is E_q [logq / logp] !
         kl_divergence += - tf.reduce_sum(self.sum_qZ_above * self.E_log_1mV + self.qZ[:, :-1] * self.E_log_V) \
-                            + tf.reduce_sum(self.qZ * tf.log(self.qZ))  # note KL divergence is - E_q [logp + logq]
-
+                            + tf.reduce_sum(self.qZ * tf.log(self.qZ))
+        
         # elbo terms for E[log p(V|c)]
         kl_divergence += - tf.log(self.dp_conc) + (self.dp_conc - 1.0) * tf.reduce_sum(self.E_log_1mV) \
                             + tf.reduce_sum( tf.lgamma(self.qV_shp1 + self.qV_shp2) - tf.lgamma(self.qV_shp1) - tf.lgamma(self.qV_shp2)
@@ -268,6 +272,8 @@ class SbmNNetMF:
 
         ###  Create q(Z) variational parameters  ###
 
+        # in GS this is uniformly initialized, why this choice?
+        # self.qZ_ = np.ones([N, T]) / T
         self.qZ_ = np.random.dirichlet(np.ones(T), size=N)  # (N, T)
 
         # the following quantity needs to be passed to the TF graph and must be updated after every update to qZ
@@ -288,6 +294,11 @@ class SbmNNetMF:
         if holdout_ratio is not None:
             test_ll = tf.placeholder(dtype=tf.float32, shape=[], name='test_ll')
             test_ll_summary = tf.summary.scalar('test_ll', test_ll)
+        
+        # Grab all scalar variables, to track in Tensorboard.
+        trainable_vars = tf.trainable_variables()
+        scalar_summaries = [tf.summary.scalar(tensor_.name, tensor_) for tensor_ in trainable_vars if len(tensor_.shape) == 0]
+        tensor_summaries = [tf.summary.histogram(tensor_.name, tensor_) for tensor_ in trainable_vars if len(tensor_.shape) > 0]
 
         writer = tf.summary.FileWriter(root_logdir)
 
@@ -332,12 +343,23 @@ class SbmNNetMF:
                 # analytically
                 self.update_qZ(sess=sess, batch=batch, n_samples=n_samples, debug=debug)
 
+
+                # this update to sum_qZ_above was done at the beginning of the iteration. this implementation updates the sum_qZ_above before
+                # logging the intermediate loss functions, and also one more time before saving the model. this actually makes more sense to me.
+                # we could also just add this computation inside the construct graph function? it would have to be recomputed a few times more, but makes the code cleaner
                 for k in range(T - 1):
                     sum_qZ_above[:, k] = np.sum(self.qZ_[:, k + 1:], axis=1)
 
                 if iteration % 20 == 0:
 
                     print(iteration, end="")
+                    
+                    # Add scalar variables to Tensorboard.
+                    for summ_str in sess.run(scalar_summaries):
+                        writer.add_summary(summ_str, iteration)
+                    # Add tensor variables to Tensorboard.
+                    for summ_str in sess.run(tensor_summaries):
+                        writer.add_summary(summ_str, iteration)
 
                     if not no_train_metric:
                         train_dict.update({self.qZ: self.qZ_, self.sum_qZ_above: sum_qZ_above, self.n_samples: 100})
@@ -446,6 +468,8 @@ class SbmNNetMF:
         # final stick
         E_log_dp[-1] = np.sum(E_log_1mV)
 
+        # should ll_ here be scaled by batch_scale?
+        # ll_ = batch_scale * ll_ + E_log_dp
         ll_ = ll_ + E_log_dp  # (N, T)
 
         # now normalize to find the probability vectors
