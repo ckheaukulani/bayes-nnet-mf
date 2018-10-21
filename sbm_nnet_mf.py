@@ -101,7 +101,6 @@ class SbmNNetMF:
             with tf.name_scope("NN_layer_%d" % layer_i):
 
                 # the p and q distributions for this layer's weights
-                # TODO: check whether we need to swap n_inputs and layer_size here
                 qW_dist = ds.Normal(loc=tf.Variable(tf.random_normal([n_inputs, layer_size]), name='qW_layer_mean'),
                                     scale=tf.nn.softplus(tf.Variable(tf.ones([n_inputs, layer_size]) * init_scale, name='qW_layer_std_unc')),
                                     name='qW_layer_dist')
@@ -189,7 +188,7 @@ class SbmNNetMF:
         self.E_log_1mV = tf.digamma(self.qV_shp2) - digamma_sum
 
         # KL terms for E[log p(Z|V)] with V integrated out (verified this, it's correct)
-        # note KL divergence is E_q [logq / logp] !
+        # note KL divergence is E_q [logq / logp]
         kl_divergence += - tf.reduce_sum(self.sum_qZ_above * self.E_log_1mV + self.qZ[:, :-1] * self.E_log_V) \
                             + tf.reduce_sum(self.qZ * tf.log(self.qZ))
         
@@ -272,7 +271,7 @@ class SbmNNetMF:
 
         ###  Create q(Z) variational parameters  ###
 
-        # in GS this is uniformly initialized, why this choice?
+        # before this was uniformly initialized
         # self.qZ_ = np.ones([N, T]) / T
         self.qZ_ = np.random.dirichlet(np.ones(T), size=N)  # (N, T)
 
