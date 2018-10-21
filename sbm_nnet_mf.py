@@ -271,9 +271,8 @@ class SbmNNetMF:
 
         ###  Create q(Z) variational parameters  ###
 
-        # before this was uniformly initialized
-        # self.qZ_ = np.ones([N, T]) / T
-        self.qZ_ = np.random.dirichlet(np.ones(T), size=N)  # (N, T)
+        # all ones specifies a uniform Dirichlet distribution
+        self.qZ_ = np.ones([N, T])  # (N, T)
 
         # the following quantity needs to be passed to the TF graph and must be updated after every update to qZ
         sum_qZ_above = np.zeros([N, T - 1])
@@ -340,12 +339,9 @@ class SbmNNetMF:
                 sess.run(train_op, feed_dict=batch_dict)
 
                 # analytically
-                self.update_qZ(sess=sess, batch=batch, n_samples=n_samples, debug=debug)
+                self.update_qZ(sess=sess, batch=batch, n_samples=n_samples, batch_scale=len(pairs) / len(batch), debug=debug)
 
-
-                # this update to sum_qZ_above was done at the beginning of the iteration. this implementation updates the sum_qZ_above before
-                # logging the intermediate loss functions, and also one more time before saving the model. this actually makes more sense to me.
-                # we could also just add this computation inside the construct graph function? it would have to be recomputed a few times more, but makes the code cleaner
+                # This needs to updated every time qZ_ is updated
                 for k in range(T - 1):
                     sum_qZ_above[:, k] = np.sum(self.qZ_[:, k + 1:], axis=1)
 
@@ -386,15 +382,17 @@ class SbmNNetMF:
         writer.close()
 
 
-    def update_qZ(self, sess, batch, n_samples, debug=False):
+    def update_qZ(self, sess, batch, batch_scale, n_samples, debug=False):
 
         """
         Analytically update the variational parameters of the distribution on the DP indicators Z.
 
         :param sess:
         :param qZ:
-        :param batch:
-        :param n_samples:
+        :param batch: (batch_size, 3) - The (row, col, val) values of the entries in the minibatch.
+        :param n_samples: The (variational expectation over the) Bernoulli likelihood term is approximated by Monte Carlo;
+            this is the number of samples to use for that approximation.
+        :param batch_scale: We need to scale up the likelihood estimate by the N/batch_size scale.
         :param debug:
         :return:
         """
@@ -467,9 +465,8 @@ class SbmNNetMF:
         # final stick
         E_log_dp[-1] = np.sum(E_log_1mV)
 
-        # should ll_ here be scaled by batch_scale?
-        # ll_ = batch_scale * ll_ + E_log_dp
-        ll_ = ll_ + E_log_dp  # (N, T)
+        # multiplying by batch scale here... should think carefully though what the right thing to do is...
+        ll_ = batch_scale * ll_ + E_log_dp  # (N, T)
 
         # now normalize to find the probability vectors
         Z_probs = np.exp(ll_ - logsumexp(ll_, axis=1)[:, None])
