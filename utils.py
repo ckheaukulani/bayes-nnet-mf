@@ -98,7 +98,7 @@ def get_pairs(N, row, col):
     pairs = np.column_stack((pairs, np.zeros(len(pairs), dtype=int)))
     # fill in edges
     for (r, c) in zip(row, col):
-        k = r*(2*N-r-1)/2-r + c-1
+        k = r * (2 * N - r - 1) / 2 - r + c - 1
         pairs[int(k), 2] = 1
 
     return pairs
