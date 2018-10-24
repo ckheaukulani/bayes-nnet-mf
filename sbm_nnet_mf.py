@@ -490,7 +490,7 @@ if __name__=='__main__':
     from scipy.sparse import find
     row, col, _ = find(X)
 
-    root_savedir = "/Users/Koa/github-repos/bayes-nnet-mf/saved_sbm"
+    root_savedir = "/Users/Koa/github-repos/bayes-nnet-mf/saved/sbm"
     root_logdir = os.path.join(root_savedir, 'tf_logs')
 
     if os.path.exists(root_logdir):

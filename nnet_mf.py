@@ -238,7 +238,7 @@ if __name__=='__main__':
     vals = np.sum(inputs * W, axis=1) + B  # (n_obs,)
 
     # now train
-    root_savedir = "/Users/Koa/github-repos/bayes-nnet-mf/saved"
+    root_savedir = "/Users/Koa/github-repos/bayes-nnet-mf/saved/vanilla"
     root_logdir = os.path.join(root_savedir, "tf_logs")
 
     if os.path.exists(root_savedir):

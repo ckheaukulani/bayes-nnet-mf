@@ -211,7 +211,7 @@ if __name__=='__main__':
     from scipy.sparse import find
     rows, cols, _ = find(X)
 
-    root_savedir = "/Users/Koa/github-repos/bayes-nnet-mf/saved_binary"
+    root_savedir = "/Users/Koa/github-repos/bayes-nnet-mf/saved/binary"
     root_logdir = os.path.join(root_savedir, "tf_logs")
 
     if os.path.exists(root_savedir):

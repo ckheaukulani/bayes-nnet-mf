@@ -316,7 +316,7 @@ if __name__=='__main__':
     B = np.random.randn()
     vals = np.sum(inputs * W, axis=1) + B  # (n_obs,)
 
-    root_savedir = "/Users/Koa/github-repos/bayes-nnet-mf/saved_vi"
+    root_savedir = "/Users/Koa/github-repos/bayes-nnet-mf/saved/vi"
     root_logdir = os.path.join(root_savedir, "tf_logs")
 
     if os.path.exists(root_savedir):
