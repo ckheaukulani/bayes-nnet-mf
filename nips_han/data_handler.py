@@ -237,25 +237,18 @@ class Dataset:
         :return:
         """
 
-        # find the authors in the edge-batch (note that authors are represented here by their 0-indices)
-        authors_in_batch = np.unique(np.concatenate([batch[:, 0], batch[:, 1]]))
+        # for every author in 'row', collect up their documents (repeating if necessary)
+        row_paper_lists = [self.papers_by_author[i_] for i_ in batch[:, 0]]
+        col_paper_lists = [self.papers_by_author[i_] for i_ in batch[:, 1]]
 
-        # pull out the "batch" of documents
-        papers_by_author_batch = [self.papers_by_author[author_ind] for author_ind in authors_in_batch]  # list of lists
-        docs_in_batch = np.unique([x for l_ in papers_by_author_batch for x in l_])  # flattened list of unique doc IDs
-
-        # form the inputs to the RNN, which takes the format of a list of lists of lists; the first level corresponds to
-        # documents, the second to sentences, and the base lists are lists of word tokens (as integer IDs)
-        text_inputs = [self.documents[paper_ind] for paper_ind in docs_in_batch]
+        # pull out the documents
+        row_text_inputs = [self.documents[paper_ind] for paper_ind in row_paper_lists]  # (batch -> docs -> sentences -> words)
+        col_text_inputs = [self.documents[paper_ind] for paper_ind in col_paper_lists]
 
         # format the batch for use with Tensorflow's dynamic RNN functions (largely entails padding)
-        text_inputs, document_sizes, sentence_sizes = self._format_text_batch(text_inputs)
+        row_text_inputs, row_document_sizes, row_sentence_sizes = self._format_text_batch(row_text_inputs)
+        col_text_inputs, col_document_sizes, col_sentence_sizes = self._format_text_batch(col_text_inputs)
 
-        # once the author embeddings are made, for every author in the minibatch, we need to map them (with a tf.gather)
-        # to their appropriate position(s) in the edge-batch; it must map from the indices of 'authors_in_batch' to 'row' and 'col'
-        authors_in_batch = authors_in_batch.tolist()
-        author_to_row = np.array([authors_in_batch.index(ind_) for ind_ in batch[:, 0]])  # looks slow...
-        author_to_col = np.array([authors_in_batch.index(ind_) for ind_ in batch[:, 1]])
 
         # Create a padded array of 'papers_by_author' restricted to this minibatch, and convert the entries to 0-indices
         # into 'docs_in_batch' (NOT the original doc indices) of the documents for that author.
@@ -276,18 +269,20 @@ class Dataset:
                author_to_col, author_to_row, papers_by_author_batchind, paper_num_by_author
 
 
-    def _format_text_batch(self, inputs):
+    def _format_text_batch(self, batched_inputs):
         """
         For every minibatch, we need an array of the word integer IDs, padded out to fill up to the max sizes of the
         tensors (at the word and sentence levels). The dynamic RNN methods also require the actual sentence and
         document lengths.
 
-        :param inputs: list of lists of lists (documents, sentences, words); elements of the lists are integer word IDs
+        :param inputs: 4-level nested list (edge-batch, documents, sentences, words); elements of the lists are integer
+            word IDs.
         :return:
         """
-        batch_size = len(inputs)  # number of documents
-        document_sizes = [len(doc) for doc in inputs]  # num sentences in each doc
-        max_document_size = max(document_sizes)  # max document length (in number of sentences)
+        batch_size = len(batched_inputs)  # number of edges in the minibatch
+        num_docs = [len(doc_list) for doc_list in batched_inputs]
+        document_sizes = [[len(doc) for doc in doc_list] for doc_list in batched_inputs]  # 3-nested list; num sentences in each doc
+        max_document_size = max([x_ for l_ in document_sizes for x_ in l_])  # max document length (in number of sentences) across all docs
 
         sentence_sizes_ = [[len(sentence) for sentence in doc] for doc in inputs]
         max_sentence_size = max([max(list_) for list_ in sentence_sizes_])
