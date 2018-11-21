@@ -114,7 +114,9 @@ class NipsHanNetwork(tf.keras.Model):
 
         # reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES) if self.l2_param is not None else []
         reg_losses = tf.losses.get_regularization_losses() if self.l2_param is not None else []
-        # print("\nReg losses:", reg_losses)
+        print("\nReg losses:", reg_losses)
+
+        # FIXME: tf.losses.get_regularization_losses() does not appear to correctly fetch losses in Eager mode
 
         loss = entropy \
                 + self.reg_param * (tf.reduce_sum(tf.square(self.U))
@@ -201,6 +203,8 @@ class NipsHanNetwork(tf.keras.Model):
             grad_fn = tfe.implicit_gradients(self.loss)
             grads_and_vars = grad_fn(batch, text_inputs, document_sizes, sentence_sizes, row_doc_inds, col_doc_inds)
 
+            # all_vars = [var_ for _, var_ in grads_and_vars]
+            # print("\n all vars:", [var_.name for var_ in all_vars])
 
             # update nnet vars
             latent_vars = [self.U, self.Up]  # the inputs to the nnets
