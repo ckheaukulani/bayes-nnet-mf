@@ -68,17 +68,16 @@ class NipsHanNetwork:
 
         # Map the constructed document vectors to become features for their authors; each author's feature is a sum of
         # their corresponding document vectors.
-        # This is rather complicated and ugly without control flow. Not sure if there's a better way to do it with graph
-        # construction... or maybe try to switch to TF eager execution?
-        self.papers_by_author_batchind = tf.placeholder(dtype=tf.int32,
-                                                        shape=[None, max_num_docs],
-                                                        name='papers_by_author_batchind')
-            # padded array representing a list of lists; for unique author in this document-batch, give the list of
-            # 0-indices into the document-batch that picks out the papers corresponding to that author
+        self.row_doc_inds = tf.placeholder(dtype=tf.int32,
+                                        shape=[None, max_num_docs],
+                                        name='row_doc_inds')
 
-        # follow a similar strategy to dynamic RNNs to pick out lists of variable sizes
-        self.paper_num_by_author = tf.placeholder(dtype=tf.int32, shape=[None], name='paper_num_by_author')
-            # the number of papers by each author in 'self.papers_by_author_batchind'
+        self.col_doc_inds = tf.placeholder(dtype=tf.int32,
+                                        shape=[None, max_num_docs],
+                                        name='col_doc_inds')
+
+        self.row_doc_nums = tf.placeholder(dtype=tf.int32, shape=[None], name='row_doc_nums')
+        self.col_doc_nums = tf.placeholder(dtype=tf.int32, shape=[None], name='col_doc_nums')
 
         print("doc vectors:", self.sentence_model.document_vectors)
 
@@ -88,25 +87,24 @@ class NipsHanNetwork:
             :param author_papers_batchind:
             :return:
             """
-            author_papers_batchind = x[0]
+            doc_inds_ = x[0]
             len_ = x[1]
-            author_papers_batchind = author_papers_batchind[:len_]
-            author_doc_embeddings = tf.gather(self.sentence_model.document_vectors, indices=author_papers_batchind)
+            doc_inds_ = doc_inds_[:len_]
+            author_doc_embeddings = tf.gather(self.sentence_model.document_vectors, indices=doc_inds_)
             author_embedding = tf.reduce_sum(author_doc_embeddings, axis=0)
             return author_embedding
 
         # tf.map_fn returns the same type as 'elems', unless keyword 'dtype' specifies otherwise
-        author_embeddings = tf.map_fn(fn=agg_embeddings,
-                                      elems=(self.papers_by_author_batchind,
-                                             self.paper_num_by_author),
+        row_embeddings = tf.map_fn(fn=agg_embeddings,
+                                      elems=(self.row_doc_inds,
+                                             self.row_doc_nums),
                                       dtype=tf.float32)  # (n_batch_authors, embedding_size)
 
-        # now map these to the entries in the row and column
-        self.author_to_row = tf.placeholder(dtype=tf.int32, shape=[None], name='author_to_row')
-        self.author_to_col = tf.placeholder(dtype=tf.int32, shape=[None], name='author_to_col')
+        col_embeddings = tf.map_fn(fn=agg_embeddings,
+                                      elems=(self.col_doc_inds,
+                                             self.col_doc_nums),
+                                      dtype=tf.float32)  # (n_batch_authors, embedding_size)
 
-        row_embeddings = tf.gather(author_embeddings, indices=self.author_to_row)  # (edge-batch_size, embedding_size)
-        col_embeddings = tf.gather(author_embeddings, indices=self.author_to_col)  # (edge-batch_size, embedding_size)
 
         ###  BUILD THE NETWORK MODEL  ###
 
@@ -231,17 +229,17 @@ class NipsHanNetwork:
                 t_iter_start = time.time()
 
                 batch, text_inputs, document_sizes, sentence_sizes, \
-                        author_to_row, author_to_col, papers_by_author_batchind, paper_num_by_author = dataset.next_batch()
+                    row_doc_inds, col_doc_inds, row_doc_nums, col_doc_nums = dataset.next_batch()
                 batch_dict = {self.row: batch[:, 0],
                               self.col: batch[:, 1],
                               self.val: batch[:, 2],
                               self.word_model.inputs: text_inputs,
                               self.word_model.sequence_lengths: sentence_sizes,
                               self.sentence_model.sequence_lengths: document_sizes,
-                              self.author_to_row: author_to_row,
-                              self.author_to_col: author_to_col,
-                              self.papers_by_author_batchind: papers_by_author_batchind,
-                              self.paper_num_by_author: paper_num_by_author
+                              self.row_doc_inds: row_doc_inds,
+                              self.col_doc_inds: col_doc_inds,
+                              self.row_doc_nums: row_doc_nums,
+                              self.col_doc_nums: col_doc_nums
                               }
 
                 # alternate between optimizing inputs, nnet weights, document model params, and word embeddings
