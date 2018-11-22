@@ -10,8 +10,6 @@ sys.path.extend(['/Users/Koa/github-repos/dynamic-nnet-rm',
                 ])
 import get_nips_data, utils
 
-import ipdb
-
 
 def make_static_dataset(savename, small=False):
     """
@@ -251,29 +249,24 @@ class Dataset:
         # format the batch for use with Tensorflow's dynamic RNN functions (largely entails padding)
         text_inputs, document_sizes, sentence_sizes = self._format_text_batch(text_inputs)
 
-        # once the author embeddings are made, for every author in the minibatch, we need to map them (with a tf.gather)
-        # to their appropriate position(s) in the edge-batch; it must map from the indices of 'authors_in_batch' to 'row' and 'col'
-        authors_in_batch = authors_in_batch.tolist()
-        author_to_row = np.array([authors_in_batch.index(ind_) for ind_ in batch[:, 0]])  # looks slow...
-        author_to_col = np.array([authors_in_batch.index(ind_) for ind_ in batch[:, 1]])
+        # for every edge-batch entry, provide the 0-indices into 'docs_in_batch' for the papers corresponding to that author
+        doc_id_to_ind = {id_: ind_ for ind_, id_ in enumerate(docs_in_batch)}  # for speed
 
-        # Create a padded array of 'papers_by_author' restricted to this minibatch, and convert the entries to 0-indices
-        # into 'docs_in_batch' (NOT the original doc indices) of the documents for that author.
-        # self.max_num_docs is the universal maximum (over all authors, regardless of batch), which is fixed in the
-        # TF graph. This is required for efficient graph construction, and note this matches the usage of tf.dynamic_rnn.
-        docs_in_batch = docs_in_batch.tolist()
-        num_authors_in_batch = len(authors_in_batch)
-        papers_by_author_batchind = np.zeros([num_authors_in_batch, self.max_num_docs])
-        for i_, doc_list in enumerate(papers_by_author_batch):
-            for j_, doc_id in enumerate(doc_list):
-                papers_by_author_batchind[i_, j_] = docs_in_batch.index(doc_id)
+        row_doc_inds = np.zeros([len(batch), self.max_num_docs])
+        for i_, author_ in enumerate(batch[:, 0]):
+            for j_, id_ in enumerate(self.papers_by_author[author_]):
+                row_doc_inds[i_, j_] = doc_id_to_ind[id_]
 
-        # just like with sentence sizes with a dynamic RNN, we will pass in the actual number of papers for each author
-        # (in the batch) to help with slicing this padded array
-        paper_num_by_author = np.array([len(l_) for l_ in papers_by_author_batch])
+        col_doc_inds = np.zeros([len(batch), self.max_num_docs])
+        for i_, author_ in enumerate(batch[:, 1]):
+            for j_, id_ in enumerate(self.papers_by_author[author_]):
+                col_doc_inds[i_, j_] = doc_id_to_ind[id_]
+
+        row_doc_nums = np.array([len(self.papers_by_author[i_]) for i_ in batch[:, 0]], dtype=int)  # (batch_size,)
+        col_doc_nums = np.array([len(self.papers_by_author[i_]) for i_ in batch[:, 1]], dtype=int)  # (batch_size,)
 
         return batch, text_inputs, document_sizes, sentence_sizes, \
-               author_to_col, author_to_row, papers_by_author_batchind, paper_num_by_author
+               row_doc_inds, col_doc_inds, row_doc_nums, col_doc_nums
 
 
     def _format_text_batch(self, inputs):
@@ -301,7 +294,7 @@ class Dataset:
                 for k, word in enumerate(sentence):
                     batch[i, j, k] = word
 
-        return batch, document_sizes, sentence_sizes
+        return batch.astype(int), np.array(document_sizes, dtype=int), sentence_sizes
 
     def next_batch(self):
         idx = self._get_idx()
@@ -309,8 +302,8 @@ class Dataset:
         batch = self.train[idx]
         return self._process_batch(batch)
 
-    def get_training_set(self):
-        return self._process_batch(self.train)
-
-    def get_testing_set(self):
-        return self._process_batch(self.test)
+    # def get_training_set(self):
+    #     return self._process_batch(self.train)
+    #
+    # def get_testing_set(self):
+    #     return self._process_batch(self.test)

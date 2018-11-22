@@ -69,26 +69,24 @@ class NipsHanNetwork:
         # Map the constructed document vectors to become features for their authors; each author's feature is a sum of
         # their corresponding document vectors.
         self.row_doc_inds = tf.placeholder(dtype=tf.int32,
-                                        shape=[None, max_num_docs],
-                                        name='row_doc_inds')
+                                           shape=[None, max_num_docs],
+                                           name='row_doc_inds')
 
         self.col_doc_inds = tf.placeholder(dtype=tf.int32,
-                                        shape=[None, max_num_docs],
-                                        name='col_doc_inds')
+                                           shape=[None, max_num_docs],
+                                           name='col_doc_inds')
 
         self.row_doc_nums = tf.placeholder(dtype=tf.int32, shape=[None], name='row_doc_nums')
         self.col_doc_nums = tf.placeholder(dtype=tf.int32, shape=[None], name='col_doc_nums')
 
-        print("doc vectors:", self.sentence_model.document_vectors)
-
-        def agg_embeddings(x):
+        def agg_embeddings(doc_inds_and_lens):
             """
 
-            :param author_papers_batchind:
+            :param doc_inds_and_lens:
             :return:
             """
-            doc_inds_ = x[0]
-            len_ = x[1]
+            doc_inds_ = doc_inds_and_lens[0]
+            len_ = doc_inds_and_lens[1]
             doc_inds_ = doc_inds_[:len_]
             author_doc_embeddings = tf.gather(self.sentence_model.document_vectors, indices=doc_inds_)
             author_embedding = tf.reduce_sum(author_doc_embeddings, axis=0)
@@ -96,14 +94,12 @@ class NipsHanNetwork:
 
         # tf.map_fn returns the same type as 'elems', unless keyword 'dtype' specifies otherwise
         row_embeddings = tf.map_fn(fn=agg_embeddings,
-                                      elems=(self.row_doc_inds,
-                                             self.row_doc_nums),
-                                      dtype=tf.float32)  # (n_batch_authors, embedding_size)
+                                   elems=(self.row_doc_inds, self.row_doc_nums),
+                                   dtype=tf.float32)  # (n_batch_authors, embedding_size)
 
         col_embeddings = tf.map_fn(fn=agg_embeddings,
-                                      elems=(self.col_doc_inds,
-                                             self.col_doc_nums),
-                                      dtype=tf.float32)  # (n_batch_authors, embedding_size)
+                                   elems=(self.col_doc_inds, self.col_doc_nums),
+                                   dtype=tf.float32)  # (n_batch_authors, embedding_size)
 
 
         ###  BUILD THE NETWORK MODEL  ###
@@ -139,12 +135,13 @@ class NipsHanNetwork:
         reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES) if l2_param is not None else []
         print("\nReg losses:", reg_losses)
 
-        loss = self.entropy \
-               + reg_param * (tf.reduce_sum(tf.square(self.U))
-                              + tf.reduce_sum(tf.square(self.Up))
-                              )
+        frob_term = reg_param * (tf.reduce_sum(tf.square(self.U))
+                                 + tf.reduce_sum(tf.square(self.Up))
+                                 )
 
-        self.loss = tf.add_n([loss] + reg_losses, name='loss')
+        self.reg_loss = tf.add_n([frob_term] + reg_losses, name='reg_loss')  # regularization terms that don't depend on data
+
+        self.loss = tf.add_n([self.entropy, self.reg_loss], name='loss')
 
 
     def train(self, adj_matrix, documents, papers_by_author,
@@ -179,8 +176,10 @@ class NipsHanNetwork:
         vocabulary_size = dataset.vocabulary_size
         max_num_docs = dataset.max_num_docs
 
-        # # keep track of the global step when storing the TF session
+        #
+        # # keep track of the global step and learning rate when storing the TF session
         # self.global_step = tf.Variable(0, name='global_step', trainable=False)
+        # self.learning_rate = tf.Variable(learning_rate_init, name='learning_rate', trainable=False)
         #
         # # training flag for batch normalization and dropout
         # self.is_training = tf.placeholder(dtype=tf.bool, name='is_training')
@@ -191,16 +190,17 @@ class NipsHanNetwork:
         self.build(vocabulary_size, max_num_docs, n_authors, reg_param, l2_param)
 
         all_vars = tf.trainable_variables()
-        latent_vars = [self.U, self.Up]  # the inputs to the nnets
-        nnet_vars = [x for x in all_vars if x not in latent_vars]  # the nnet variables for the
+        features = [self.U, self.Up]  # the inputs to the nnets
+        embeddings = [self.word_model.word_embeddings]
+        nnet_vars = [x for x in all_vars if x not in features + embeddings]  # the nnet variables for the
 
-        print("\nlatent vars:", latent_vars)
-        print("\nnnet vars:", nnet_vars)
-        print("\nword embeddings:", self.word_model.word_embeddings)
+        print("\nfeatures:", [x_.name for x_ in features])
+        print("\nnnet vars:", [x_.name for x_ in nnet_vars])
+        print("\nword embeddings:", [x_.name for x_ in embeddings])
 
-        train_lvars = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.loss, var_list=latent_vars)
+        train_features = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.loss, var_list=features)
         train_nnet = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.loss, var_list=nnet_vars)
-        train_embeddings = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.loss, var_list=[self.word_model.word_embeddings])
+        train_embeddings = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.loss, var_list=embeddings)
 
         ###  Training  ###
 
@@ -228,69 +228,40 @@ class NipsHanNetwork:
 
                 t_iter_start = time.time()
 
-                batch, text_inputs, document_sizes, sentence_sizes, \
-                    row_doc_inds, col_doc_inds, row_doc_nums, col_doc_nums = dataset.next_batch()
-                batch_dict = {self.row: batch[:, 0],
-                              self.col: batch[:, 1],
-                              self.val: batch[:, 2],
-                              self.word_model.inputs: text_inputs,
-                              self.word_model.sequence_lengths: sentence_sizes,
-                              self.sentence_model.sequence_lengths: document_sizes,
-                              self.row_doc_inds: row_doc_inds,
-                              self.col_doc_inds: col_doc_inds,
-                              self.row_doc_nums: row_doc_nums,
-                              self.col_doc_nums: col_doc_nums
-                              }
+                batch_set = dataset.next_batch()
+                batch_dict = self.make_feed_dict(*batch_set)
 
                 # alternate between optimizing inputs, nnet weights, document model params, and word embeddings
-                sess.run(train_lvars, feed_dict=batch_dict)
+                sess.run(train_features, feed_dict=batch_dict)
                 sess.run(train_nnet, feed_dict=batch_dict)
                 sess.run(train_embeddings, feed_dict=batch_dict)
 
                 iter_time = time.time() - t_iter_start
                 t_iters_total += iter_time
 
+                # if not best_loss or eval_loss < best_loss:
+                #     if FLAGS.logdir:
+                #         checkpoint.save(os.path.join(FLAGS.logdir, "ckpt"))
+                #     best_loss = eval_loss
+                # else:
+                #     learning_rate.assign(learning_rate / 4.0)
+                #     sys.stderr.write("eval_loss did not reduce in this epoch, "
+                #                      "changing learning rate to %f for the next epoch\n" %
+                #                      learning_rate.numpy())
+
                 if iteration % 20 == 0:
 
                     print(iteration, end="")
 
                     if not no_train_metric:
-                        batch, text_inputs, document_sizes, sentence_sizes, \
-                                author_to_row, author_to_col, papers_by_author_batchind, paper_num_by_author = dataset.get_training_set()
-                        train_dict = {self.row: batch[:, 0],
-                                      self.col: batch[:, 1],
-                                      self.val: batch[:, 2],
-                                      self.word_model.inputs: text_inputs,
-                                      self.word_model.sequence_lengths: sentence_sizes,
-                                      self.sentence_model.sequence_lengths: document_sizes,
-                                      self.author_to_row: author_to_row,
-                                      self.author_to_col: author_to_col,
-                                      self.papers_by_author_batchind: papers_by_author_batchind,
-                                      self.paper_num_by_author: paper_num_by_author
-                                      }
-
-                        train_loss_ = sess.run(self.loss, feed_dict=train_dict)
+                        train_loss_, _ = self.evaluate(sess, dataset, pairs=dataset.train)
                         train_loss_summary_str = sess.run(train_loss_summary, feed_dict={train_loss: train_loss_})
                         writer.add_summary(train_loss_summary_str, iteration)
                         print("\tTrain loss: %.4f" % train_loss_, end="")
 
 
                     if holdout_ratio is not None:
-                        batch, text_inputs, document_sizes, sentence_sizes, \
-                                author_to_row, author_to_col, papers_by_author_batchind, paper_num_by_author = dataset.get_testing_set()
-                        test_dict = {self.row: batch[:, 0],
-                                     self.col: batch[:, 1],
-                                     self.val: batch[:, 2],
-                                     self.word_model.inputs: text_inputs,
-                                     self.word_model.sequence_lengths: sentence_sizes,
-                                     self.sentence_model.sequence_lengths: document_sizes,
-                                     self.author_to_row: author_to_row,
-                                     self.author_to_col: author_to_col,
-                                     self.papers_by_author_batchind: papers_by_author_batchind,
-                                     self.paper_num_by_author: paper_num_by_author
-                                     }
-
-                        test_xent_ = sess.run(self.entropy, feed_dict=test_dict)
+                        _, test_xent_ = self.evaluate(sess, dataset, pairs=dataset.test)
                         test_xent_summary_str = sess.run(test_xent_summary, feed_dict={test_xent: test_xent_})
                         writer.add_summary(test_xent_summary_str, iteration)
                         print("\tTest xent: %.4f" % test_xent_, end="")
@@ -305,7 +276,46 @@ class NipsHanNetwork:
         # close the file writer
         writer.close()
 
+    def evaluate(self, sess, dataset, pairs, seq_len=1000):
 
+        total_entropy = 0.0
+        total_batches = 0
+
+        start = time.time()
+        for i_ in range(0, pairs.shape[0] - 1, seq_len):
+            slen = min(seq_len, pairs.shape[0] - 1 - i_)
+            batch = pairs[i_:i_ + slen, :]
+            batch_set = dataset._process_batch(batch)
+            batch_dict = self.make_feed_dict(*batch_set)
+            entropy_ = sess.run(self.entropy, feed_dict=batch_dict)
+            total_entropy += entropy_
+            total_batches += 1
+
+        reg_terms = sess.run(self.reg_loss)  # does not depend on data
+        final_loss = total_entropy + reg_terms
+
+        time_in_ms = (time.time() - start) * 1000
+        sys.stderr.write("eval loss %.2f (eval took %d ms)\n" %
+                         (final_loss, time_in_ms))
+
+        return final_loss, total_entropy
+
+    def make_feed_dict(self, batch, text_inputs, document_sizes, sentence_sizes,
+                       row_doc_inds, col_doc_inds, row_doc_nums, col_doc_nums):
+
+        feed_dict = {self.row: batch[:, 0],
+                     self.col: batch[:, 1],
+                     self.val: batch[:, 2],
+                     self.word_model.inputs: text_inputs,
+                     self.word_model.sequence_lengths: sentence_sizes,
+                     self.sentence_model.sequence_lengths: document_sizes,
+                     self.row_doc_inds: row_doc_inds,
+                     self.col_doc_inds: col_doc_inds,
+                     self.row_doc_nums: row_doc_nums,
+                     self.col_doc_nums: col_doc_nums
+                     }
+
+        return feed_dict
 
 
 if __name__=='__main__':
@@ -329,8 +339,8 @@ if __name__=='__main__':
     root_logdir = os.path.join(root_savedir, "tf_logs")
 
     m.train(adj_matrix, documents, papers_by_author,
-            n_iterations=3, batch_size=100, learning_rate=0.01,
+            n_iterations=100, batch_size=32, learning_rate=0.01,
             reg_param=0.01, l2_param=0.01,
             root_savedir=root_savedir, root_logdir=root_logdir,
-            holdout_ratio=0.03, no_train_metric=True,
+            holdout_ratio=0.03, no_train_metric=False,
             seed=None)
