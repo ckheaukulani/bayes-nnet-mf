@@ -212,6 +212,9 @@ class NipsHanNetwork:
             test_xent = tf.placeholder(dtype=tf.float32, shape=[], name='test_xent')
             test_xent_summary = tf.summary.scalar('test_xent', test_xent)
 
+        scalar_summaries = [tf.summary.scalar(tensor_.name, tensor_) for tensor_ in all_vars if len(tensor_.shape) == 0]
+        tensor_summaries = [tf.summary.histogram(tensor_.name, tensor_) for tensor_ in all_vars if len(tensor_.shape) > 0]
+
         writer = tf.summary.FileWriter(root_logdir)
         saver = tf.train.Saver()
         init = tf.global_variables_initializer()
@@ -269,6 +272,11 @@ class NipsHanNetwork:
                     total_mins = (time.time() - t_start) / 60.0
                     ave_per_iter = t_iters_total / (iteration + 1.)
                     print("\tTot. time: %.2f mins (ave. %.2f secs/iter)" % (total_mins, ave_per_iter))
+
+                    scalar_summaries_str = sess.run(scalar_summaries)
+                    array_summaries_str = sess.run(tensor_summaries)
+                    for summary_ in scalar_summaries_str + array_summaries_str:
+                        writer.add_summary(summary_, iteration)
 
             # save the model
             saver.save(sess, os.path.join(root_savedir, "model.ckpt"))

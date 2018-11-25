@@ -146,8 +146,10 @@ class NNetMF:
             test_mse = tf.placeholder(dtype=tf.float32, shape=[], name='test_mse')
             test_mse_summary = tf.summary.scalar('test_mse', test_mse)
 
-        # now = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-        # logdir = "{}/run-{}/".format(root_logdir, now)
+        # create tensorboard summary objects
+        scalar_summaries = [tf.summary.scalar(var_.name, var_) for var_ in all_vars if len(var_.shape) == 0]
+        array_summaries = [tf.summary.histogram(var_.name, var_) for var_ in all_vars if len(var_.shape) > 0]
+
         writer = tf.summary.FileWriter(root_logdir)
 
         saver = tf.train.Saver()
@@ -197,6 +199,10 @@ class NNetMF:
                         writer.add_summary(test_mse_summary_str, iteration)
                         print("\ttest mse: %.4f" % test_mse_)
 
+                    scalar_summaries_str = sess.run(scalar_summaries)
+                    array_summaries_str = sess.run(array_summaries)
+                    for summary_ in scalar_summaries_str + array_summaries_str:
+                        writer.add_summary(summary_, iteration)
 
             # save the model
             saver.save(sess, os.path.join(root_savedir, "model.ckpt"))

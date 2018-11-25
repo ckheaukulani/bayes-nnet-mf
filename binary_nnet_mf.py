@@ -15,7 +15,7 @@ class BinaryNNetMF:
         that the nnet function is not symmetric.
         """
 
-    def construct_graph(self):
+    def build(self):
 
         N = self.N
         n_factors = self.n_factors
@@ -123,7 +123,7 @@ class BinaryNNetMF:
 
         ###  Construct the TF graph  ###
 
-        self.construct_graph()
+        self.build()
 
         all_vars = tf.trainable_variables()
         latent_vars = [self.U, self.Up]  # the inputs to the nnets
@@ -145,8 +145,10 @@ class BinaryNNetMF:
             test_xent = tf.placeholder(dtype=tf.float32, shape=[], name='test_xent')
             test_xent_summary = tf.summary.scalar('test_xent', test_xent)
 
-        # now = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-        # logdir = "{}/run-{}/".format(root_logdir, now)
+        # create tensorboard summary objects
+        scalar_summaries = [tf.summary.scalar(var_.name, var_) for var_ in all_vars if len(var_.shape) == 0]
+        array_summaries = [tf.summary.histogram(var_.name, var_) for var_ in all_vars if len(var_.shape) > 0]
+
         writer = tf.summary.FileWriter(root_logdir)
 
         saver = tf.train.Saver()
@@ -194,6 +196,11 @@ class BinaryNNetMF:
                         test_xent_summary_str = sess.run(test_xent_summary, feed_dict={test_xent: test_xent_})
                         writer.add_summary(test_xent_summary_str, iteration)
                         print("\ttest xent: %.4f" % test_xent_)
+
+                    scalar_summaries_str = sess.run(scalar_summaries)
+                    array_summaries_str = sess.run(array_summaries)
+                    for summary_ in scalar_summaries_str + array_summaries_str:
+                        writer.add_summary(summary_, iteration)
 
 
             # save the model

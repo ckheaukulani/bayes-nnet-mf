@@ -222,6 +222,11 @@ class VINNetMF:
             test_ll = tf.placeholder(dtype=tf.float32, shape=[], name='test_ll')
             test_ll_summary = tf.summary.scalar('test_ll', test_ll)
 
+        # create tensorboard summary objects
+        all_vars = tf.trainable_variables()
+        scalar_summaries = [tf.summary.scalar(var_.name, var_) for var_ in all_vars if len(var_.shape) == 0]
+        array_summaries = [tf.summary.histogram(var_.name, var_) for var_ in all_vars if len(var_.shape) > 0]
+
         writer = tf.summary.FileWriter(root_logdir)
 
         saver = tf.train.Saver()
@@ -276,6 +281,10 @@ class VINNetMF:
                         writer.add_summary(test_ll_summary_str, iteration)
                         print("\tTest LL: %.4f" % test_ll_)
 
+                    scalar_summaries_str = sess.run(scalar_summaries)
+                    array_summaries_str = sess.run(array_summaries)
+                    for summary_ in scalar_summaries_str + array_summaries_str:
+                        writer.add_summary(summary_, iteration)
 
             # save the model
             saver.save(sess, os.path.join(root_savedir, "model.ckpt"))
