@@ -29,7 +29,11 @@ def make_static_dataset(savename, small=False):
     else:
         paper_text_df, paper_authors_df, authors_df = get_nips_data.load_data()
 
-    # first process the text data, since in theory this could remove some documents
+        # first trim the dataset of authors without enough co-authorship links
+        paper_text_df, paper_authors_df, authors_df = \
+            get_nips_data.trim_by_coauthor_links(paper_text_df, paper_authors_df, authors_df, min_threshold=3)
+
+    # process the text data, since in theory this could remove some documents
     documents = get_nips_data.process_text_data(paper_text_df)
     del paper_text_df
 
@@ -53,7 +57,7 @@ def make_static_dataset(savename, small=False):
     print("Converting word tokens to integers...")
     documents, vocabulary = convert_tokens_to_ints(documents)
 
-    # bind all this data together
+    # bind all this data together and save it
     with open(savename, "wb") as f:
         pickle.dump((adj_matrix, documents, vocabulary, paper_authors_df, authors_df), f)
 
