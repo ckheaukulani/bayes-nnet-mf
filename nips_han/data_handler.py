@@ -153,15 +153,33 @@ class Dataset:
 
         # required entries in the dict 'adj_matrix'
         n_authors = adj_matrix['n_authors']
+        author_id_map = adj_matrix['author_id_map']
+
         rows = adj_matrix['row']
         cols = adj_matrix['col']
-        author_id_map = adj_matrix['author_id_map']
 
         self.n_authors = n_authors
 
         # collect up all pairs in the binary matrix and format as a single array
         pairs = utils.get_pairs(n_authors, rows, cols)
         pairs = pairs.astype(int)
+
+        # remove missing indices, if any
+        # TODO: Test this
+        if 'miss_row' in list(adj_matrix.keys()):
+
+            miss_rows = adj_matrix['miss_row']
+            miss_cols = adj_matrix['miss_col']
+
+            assert len(np.unique(np.concatenate([rows, miss_rows]))) == (len(rows) + len(miss_rows))  # should not overlap
+            assert len(np.unique(np.concatenate([cols, miss_cols]))) == (len(cols) + len(miss_cols))  # should not overlap
+
+            # searching the indices sequentially would be too slow, so dump into a dictionary
+            ind_map = {(i_, j_): ind_ for ind_, (i_, j_) in enumerate(zip(pairs[:, 0], pairs[:, 1]))}
+            miss_inds = [ind_map[(i_, j_)] for i_, j_ in zip(miss_rows, miss_cols)]
+
+            pairs = np.delete(pairs, miss_inds, axis=0)
+            print("Removed {} missing entries, resulting in {} edges.".format(len(miss_inds), len(pairs)))
 
         if batch_size is None:
             batch_size = len(pairs)

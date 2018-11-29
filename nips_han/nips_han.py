@@ -152,7 +152,14 @@ class NipsHanNetwork:
         """
         Training routine.
 
-        :param adj_matrix:
+        :param adj_matrix: Dict - The upper triangle of the adjacency matrix as a dictionary with the following keys:
+            'n_authors': int - number of nodes in the graph.
+            'author_id_map': Dict - like {<author_id>: <int 0-index>} mapping the author's ID to the corresponding
+                integer-valued 0-index in this adjacency matrix.
+            'row': array - row indices of the links (positive edges) in the upper triangular matrix.
+            'col': array - column indices of the links in the upper triangular matrix.
+            'miss_row': (optional) array - row indices of the missing edges in the upper triangular matrix.
+            'miss_col': (optional) array - column indices of the missing edges in the upper triangular matrix.
         :param documents:
         :param papers_by_authors: dict like {<author_id>: [<paper_id>, ...], ...}
         :param n_iterations:
