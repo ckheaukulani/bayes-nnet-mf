@@ -1,8 +1,6 @@
 import numpy as np
-from itertools import combinations
 
-class BatchGenerator(object):
-
+class BatchGenerator:
     def __init__(self, pairs, batch_size=None, holdout_ratio=0.1, seed=None):
         np.random.seed(seed)
 
@@ -66,6 +64,30 @@ class BatchGenerator(object):
         return batch
 
 
+class Dataset(BatchGenerator):
+    def __init__(self, N, on_rows, on_cols, miss_rows=None, miss_cols=None,
+                 batch_size=None, holdout_ratio=0.1, seed=None):
+
+        pairs = get_pairs(N, on_rows, on_cols)
+        pairs = pairs.astype(int)
+
+        # remove missing indices, if any
+        # TODO: Test this
+        if miss_rows is not None:
+
+            assert len(np.unique(np.concatenate([on_rows, miss_rows]))) == (len(on_rows) + len(miss_rows))  # should not overlap
+            assert len(np.unique(np.concatenate([on_cols, miss_cols]))) == (len(on_cols) + len(miss_cols))  # should not overlap
+
+            # searching the indices sequentially would be too slow, so dump into a dictionary
+            ind_map = {(i_, j_): ind_ for ind_, (i_, j_) in enumerate(zip(pairs[:, 0], pairs[:, 1]))}
+            miss_inds = [ind_map[(i_, j_)] for i_, j_ in zip(miss_rows, miss_cols)]
+
+            pairs = np.delete(pairs, miss_inds, axis=0)
+            print("Removed {} missing entries, resulting in {} edges.".format(len(miss_inds), len(pairs)))
+
+        super().__init__(pairs, batch_size=batch_size, holdout_ratio=holdout_ratio, seed=seed)
+
+
 def log_gaussian_density(x, mu, L):
 
     """
@@ -92,8 +114,14 @@ def log_gaussian_density(x, mu, L):
 
 from itertools import combinations
 def get_pairs(N, row, col):
+    """
+    Enumerates all edges of the UPPER triangle, given the "on" entries.
 
-    # enumerates all edges of the upper triangle
+    :param N:
+    :param row:
+    :param col:
+    :return:
+    """
     pairs = np.array(list(combinations(range(N), 2)))
     pairs = np.column_stack((pairs, np.zeros(len(pairs), dtype=int)))
     # fill in edges

@@ -4,7 +4,7 @@ import tensorflow as tf
 import tensorflow.contrib.distributions as ds
 import numpy as np
 
-from utils import BatchGenerator, get_pairs
+from utils import Dataset
 
 
 class VIBinaryNNetMF:
@@ -13,7 +13,7 @@ class VIBinaryNNetMF:
         Base class for binary link prediction trained by variational inference.
         """
 
-    def construct_graph(self):
+    def build(self):
 
         N = self.N
         n_factors = self.n_factors
@@ -54,9 +54,6 @@ class VIBinaryNNetMF:
         # compute the KL terms
         kl_terms += tf.reduce_sum(qU_dist.kl_divergence(pU_dist))  # scalar
         kl_terms += tf.reduce_sum(qUp_dist.kl_divergence(pUp_dist))
-
-        # logp += tf.reduce_sum(pU_dist.logp(qU_samps), axis=(1, 2))  # (n_samples,)
-        # logq += tf.reduce_sum(qU_dist.logp(qU_samps), axis=(1, 2))
 
         # produce samples
         qU_samps = qU_dist.sample(self.n_samples)  # (n_samples, N, n_factors)
@@ -111,10 +108,6 @@ class VIBinaryNNetMF:
             # add up the KL terms
             kl_terms += tf.reduce_sum(qW_dist.kl_divergence(pW_dist))
             kl_terms += tf.reduce_sum(qB_dist.kl_divergence(pB_dist))
-            # logp += tf.reduce_sum(pW_dist.logp(qW_samps), axis=(1, 2))  # (n_samples,)
-            # logq += tf.reduce_sum(qW_dist.logp(qW_samps), axis=(1, 2))  # (n_samples,)
-            # logp += tf.reduce_sum(pB_dist.logp(qB_samps), axis=(1, 2))  # (n_samples,)
-            # logq += tf.reduce_sum(qB_dist.logp(qB_samps), axis=(1, 2))  # (n_samples,)
 
         # output layer, univariate output
         qW_mean = tf.Variable(tf.zeros([n_inputs, 1]))
@@ -132,11 +125,6 @@ class VIBinaryNNetMF:
         kl_terms += tf.reduce_sum(qW_dist.kl_divergence(pW_dist))
         kl_terms += tf.reduce_sum(qB_dist.kl_divergence(pB_dist))
 
-        # logp += tf.reduce_sum(pW_dist.logp(qW_samps), axis=(1, 2))  # (n_samples,)
-        # logq += tf.reduce_sum(qW_dist.logp(qW_samps), axis=(1, 2))  # (n_samples,)
-        # logp += tf.reduce_sum(pB_dist.logp(qB_samps), axis=(1, 2))  # (n_samples,)
-        # logq += tf.reduce_sum(qB_dist.logp(qB_samps), axis=(1, 2))  # (n_samples,)
-
         logits = tf.matmul(inputs_, qW_samps) + qB_samps[:, None, None]  # (n_samples, batch_size, layer_size) x (n_samples, layer_size, 1) --> (n_samples, batch_size, 1)
         # self.logits = tf.einsum('jk,ijk->ij', qW_samps, inputs_) + qB_samps  # (batch_size, n_samples)
 
@@ -151,9 +139,11 @@ class VIBinaryNNetMF:
         self.elbo = self.data_loglikel - kl_terms
 
 
-    def train(self, N, rows, cols, n_factors, d_pairwise, hidden_layer_sizes,
-              n_iterations, batch_size, holdout_ratio, learning_rate, n_samples,
-              root_savedir, root_logdir,
+    def train(self, N, rows, cols, miss_rows=None, miss_cols=None,
+              n_factors=20, d_pairwise=1, hidden_layer_sizes=[],
+              n_iterations=1000, batch_size=None, holdout_ratio=None,
+              learning_rate=0.001, n_samples=10,
+              root_savedir='saved', root_logdir=None,
               no_train_metric=False, seed=None):
 
         """
@@ -185,17 +175,17 @@ class VIBinaryNNetMF:
         if not os.path.exists(root_savedir):
             os.makedirs(root_savedir)
 
+        root_logdir = os.path.join(root_savedir, 'tf_logs') if root_logdir is None else root_logdir
+
         ###  Data handling  ###
 
-        pairs = get_pairs(N, rows, cols)
-        pairs = pairs.astype(int)
-
-        batch_generator = BatchGenerator(pairs, batch_size, holdout_ratio=holdout_ratio, seed=seed)
+        dataset = Dataset(N, rows, cols, miss_rows=miss_rows, miss_cols=miss_cols,
+                          batch_size=batch_size, holdout_ratio=holdout_ratio, seed=seed)
 
 
         ###  Construct the TF graph  ###
 
-        self.construct_graph()
+        self.build()
 
         train_op = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(-self.elbo)
 
@@ -227,28 +217,28 @@ class VIBinaryNNetMF:
             init.run()
 
             if not no_train_metric:
-                train_dict = {self.row: batch_generator.train[:, 0],
-                              self.col: batch_generator.train[:, 1],
-                              self.val: batch_generator.train[:, 2],
+                train_dict = {self.row: dataset.train[:, 0],
+                              self.col: dataset.train[:, 1],
+                              self.val: dataset.train[:, 2],
                               self.n_samples: 100,
                               self.batch_scale: 1.0}
 
             if holdout_ratio is not None:
-                test_dict = {self.row: batch_generator.test[:, 0],
-                             self.col: batch_generator.test[:, 1],
-                             self.val: batch_generator.test[:, 2],
+                test_dict = {self.row: dataset.test[:, 0],
+                             self.col: dataset.test[:, 1],
+                             self.val: dataset.test[:, 2],
                              self.n_samples: 100,
                              self.batch_scale: 1.0}
 
 
             for iteration in range(n_iterations):
 
-                batch = batch_generator.next_batch()
+                batch = dataset.next_batch()
                 sess.run(train_op, feed_dict={self.row: batch[:, 0],
                                               self.col: batch[:, 1],
                                               self.val: batch[:, 2],
                                               self.n_samples: n_samples,
-                                              self.batch_scale: len(batch_generator.train) / len(batch)
+                                              self.batch_scale: len(dataset.train) / len(batch)
                                               })
 
                 if iteration % 20 == 0:
@@ -298,9 +288,9 @@ if __name__=='__main__':
         shutil.rmtree(root_savedir)
 
     model = VIBinaryNNetMF()
-    model.train(N, rows, cols, n_factors=4, hidden_layer_sizes=[10, 8], d_pairwise=20,
-                      n_iterations=1000, batch_size=1000, holdout_ratio=0.1, learning_rate=0.01, n_samples=10,
-                      root_savedir=root_savedir, root_logdir=root_logdir, no_train_metric=False)
-
+    model.train(N, rows, cols, miss_rows=None, miss_cols=None,
+                n_factors=4, hidden_layer_sizes=[10, 8], d_pairwise=20,
+                n_iterations=1000, batch_size=1000, holdout_ratio=0.1, learning_rate=0.01, n_samples=10,
+                root_savedir=root_savedir, root_logdir=root_logdir, no_train_metric=False)
 
     os.system('/Users/Koa/anaconda3/bin/tensorboard --logdir=' + root_logdir)

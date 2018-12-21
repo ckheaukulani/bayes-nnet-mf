@@ -4,7 +4,7 @@ import shutil
 import tensorflow as tf
 import numpy as np
 
-from utils import BatchGenerator, get_pairs
+from utils import Dataset
 
 
 class BinaryNNetMF:
@@ -52,16 +52,16 @@ class BinaryNNetMF:
         weights_regularizer = tf.contrib.layers.l2_regularizer(l2_param) if l2_param is not None else None
 
         for layer_size in hidden_layer_sizes:
-            inputs_ = tf.contrib.layers.fully_connected(inputs_, layer_size, activation_fn=activation_fn,
-                                                        weights_regularizer=weights_regularizer)
+            inputs_ = tf.layers.dense(inputs_, layer_size, activation=activation_fn,
+                                      kernel_regularizer=weights_regularizer)
 
         # output layer
-        self.logits = tf.contrib.layers.fully_connected(inputs_, 1, activation_fn=None)
+        self.logits = tf.layers.dense(inputs_, 1, activation=None, kernel_regularizer=weights_regularizer)
 
         # probs = tf.nn.sigmoid(logits)
 
-        self.entropy = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.cast(self.val, tf.float32),
-                                                                             logits=tf.squeeze(self.logits)))
+        self.entropy = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.cast(self.val, tf.float32),
+                                                                              logits=tf.squeeze(self.logits)))
 
         reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES) if l2_param is not None else []
         print("\nReg losses:", reg_losses)
@@ -75,10 +75,12 @@ class BinaryNNetMF:
 
 
 
-    def train(self, N, rows, cols, n_factors, d_pairwise, hidden_layer_sizes,
-              n_iterations, batch_size, holdout_ratio, learning_rate, reg_param, l2_param,
-              root_savedir, root_logdir,
-              no_train_metric=False, seed=None):
+    def train(self, N, rows, cols, miss_rows=None, miss_cols=None,
+              n_factors=20, d_pairwise=1, hidden_layer_sizes=[], n_iterations=1000,
+              batch_size=None, holdout_ratio=None, learning_rate=0.001,
+              reg_param=0.01, l2_param=None,
+              root_savedir='saved', root_logdir=None,
+              seed=None):
 
         """
         Training routine.
@@ -97,8 +99,7 @@ class BinaryNNetMF:
         :param l2_param: L2 regularization parameter for the nnet weights
         :param root_savedir:
         :param root_logdir:
-        :param no_train_metric:
-        :param seed:
+\        :param seed:
         :return:
         """
 
@@ -112,14 +113,12 @@ class BinaryNNetMF:
         if not os.path.exists(root_savedir):
             os.makedirs(root_savedir)
 
+        root_logdir = os.path.join(root_savedir, 'tf_logs') if root_logdir is None else root_logdir
 
         ###  Data handling  ###
 
-        pairs = get_pairs(N, rows, cols)
-        pairs = pairs.astype(int)
-
-        batch_generator = BatchGenerator(pairs, batch_size, holdout_ratio=holdout_ratio, seed=seed)
-
+        dataset = Dataset(N, rows, cols, miss_rows=miss_rows, miss_cols=miss_cols,
+                          batch_size=batch_size, holdout_ratio=holdout_ratio, seed=seed)
 
         ###  Construct the TF graph  ###
 
@@ -137,9 +136,8 @@ class BinaryNNetMF:
 
         ###  Training  ###
 
-        if not no_train_metric:
-            train_loss = tf.placeholder(dtype=tf.float32, shape=[], name='train_loss')
-            train_loss_summary = tf.summary.scalar('train_loss', train_loss)
+        train_loss = tf.placeholder(dtype=tf.float32, shape=[], name='train_loss')
+        train_loss_summary = tf.summary.scalar('train_loss', train_loss)
 
         if holdout_ratio is not None:
             test_xent = tf.placeholder(dtype=tf.float32, shape=[], name='test_xent')
@@ -158,20 +156,9 @@ class BinaryNNetMF:
 
             init.run()
 
-            if not no_train_metric:
-                train_dict = {self.row: batch_generator.train[:, 0],
-                              self.col: batch_generator.train[:, 1],
-                              self.val: batch_generator.train[:, 2]}
-
-            if holdout_ratio is not None:
-                test_dict = {self.row: batch_generator.test[:, 0],
-                             self.col: batch_generator.test[:, 1],
-                             self.val: batch_generator.test[:, 2]}
-
-
             for iteration in range(n_iterations):
 
-                batch = batch_generator.next_batch()
+                batch = dataset.next_batch()
                 batch_dict = {self.row: batch[:, 0],
                               self.col: batch[:, 1],
                               self.val: batch[:, 2]}
@@ -184,15 +171,13 @@ class BinaryNNetMF:
 
                     print(iteration, end="")
 
-                    if not no_train_metric:
-                        train_loss_ = sess.run(self.loss, feed_dict=train_dict)
-                        train_loss_summary_str = sess.run(train_loss_summary, feed_dict={train_loss: train_loss_})
-                        writer.add_summary(train_loss_summary_str, iteration)
-                        print("\ttrain loss: %.4f" % train_loss_, end="")
-
+                    train_entropy_ = self.evaluate(dataset.train, sess)
+                    train_loss_summary_str = sess.run(train_loss_summary, feed_dict={train_loss: train_entropy_})
+                    writer.add_summary(train_loss_summary_str, iteration)
+                    print("\ttrain xent: %.4f" % train_entropy_, end="")
 
                     if holdout_ratio is not None:
-                        test_xent_ = sess.run(self.entropy, feed_dict=test_dict)
+                        test_xent_ = self.evaluate(dataset.test, sess)
                         test_xent_summary_str = sess.run(test_xent_summary, feed_dict={test_xent: test_xent_})
                         writer.add_summary(test_xent_summary_str, iteration)
                         print("\ttest xent: %.4f" % test_xent_)
@@ -202,12 +187,22 @@ class BinaryNNetMF:
                     for summary_ in scalar_summaries_str + array_summaries_str:
                         writer.add_summary(summary_, iteration)
 
-
             # save the model
             saver.save(sess, os.path.join(root_savedir, "model.ckpt"))
 
         # close the file writer
         writer.close()
+
+    def evaluate(self, pairs, session, batch_size=1000):
+        total_entropy = 0.0
+        num_batches = -(-len(pairs) // batch_size)  # round up
+        for mb in range(num_batches):
+            start = mb * batch_size
+            finish = (mb + 1) * batch_size
+            row_mb, col_mb, val_mb = pairs[start:finish, 0], pairs[start:finish, 1], pairs[start:finish, 2]
+            mb_entropy = session.run(self.entropy, feed_dict={self.row: row_mb, self.col: col_mb, self.val: val_mb})
+            total_entropy += mb_entropy * len(row_mb)
+        return total_entropy / len(pairs)
 
 
 if __name__=='__main__':
@@ -225,8 +220,9 @@ if __name__=='__main__':
         shutil.rmtree(root_savedir)
 
     model = BinaryNNetMF()
-    model.train(N, rows, cols, n_factors=20, hidden_layer_sizes=[20, 10], d_pairwise=20,
-                      n_iterations=1000, batch_size=None, holdout_ratio=0.1, learning_rate=0.01, reg_param=0.1,
-                      l2_param=None, root_savedir=root_savedir, root_logdir=root_logdir, no_train_metric=False)
+    model.train(N, rows, cols, miss_rows=None, miss_cols=None,
+                n_factors=20, hidden_layer_sizes=[20, 10], d_pairwise=20,
+                n_iterations=1000, batch_size=None, holdout_ratio=0.1, learning_rate=0.01, reg_param=0.1,
+                l2_param=None, root_savedir=root_savedir, root_logdir=root_logdir)
 
     os.system('/Users/Koa/anaconda3/bin/tensorboard --logdir=' + root_logdir)
