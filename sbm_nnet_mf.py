@@ -6,7 +6,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.misc import logsumexp
 
-from utils import BatchGenerator, get_pairs, log_gaussian_density
+from utils import BatchGenerator, get_pairs
 
 
 class SbmNNetMF:
